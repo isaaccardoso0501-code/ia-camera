@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Câmera IA</title>
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#000000">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<link rel="apple-touch-icon" href="icon-192.png">
+<style>
+:root{--bg:#f4f4f5;--fg:#18181b;--mut:#63636b;--chip:rgba(255,255,255,.9);--acc:#f5b800;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#0b0b0d;--fg:#f4f4f5;--mut:#a1a1aa;--chip:rgba(30,30,34,.85)}}
+:root[data-theme="dark"]{--bg:#0b0b0d;--fg:#f4f4f5;--mut:#a1a1aa;--chip:rgba(30,30,34,.85)}
+html,body{height:100%;margin:0;background:var(--bg);color:var(--fg);font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;-webkit-tap-highlight-color:transparent}
+body::before{content:"";position:fixed;inset:0 0 auto;height:env(safe-area-inset-top,0px);background:#000;z-index:10}
+#cam,#res{position:absolute;inset:0;overflow:hidden;background:#000}
+#cam{top:env(safe-area-inset-top,0px);bottom:env(safe-area-inset-bottom,0px)}
+#res{top:env(safe-area-inset-top,0px);bottom:env(safe-area-inset-bottom,0px);display:none;flex-direction:column;background:var(--bg)}
+video{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;transform-origin:center}
+.frame{position:absolute;inset:14% 10%;pointer-events:none;border:1px solid rgba(255,255,255,.18);border-radius:4px}
+.chip{position:absolute;top:12px;left:50%;transform:translateX(-50%);background:var(--chip);color:var(--fg);padding:6px 14px;border-radius:99px;font-size:14px;font-weight:600;font-variant-numeric:tabular-nums}
+#msg{position:absolute;left:20px;right:20px;top:40%;text-align:center;color:#fff;font-size:15px;line-height:1.5}
+.ctl{position:absolute;left:0;right:0;bottom:0;padding:16px 20px 22px;background:linear-gradient(transparent,rgba(0,0,0,.65));color:#fff}
+input[type=range]{width:100%;accent-color:var(--acc);margin:0 0 14px}
+.row{display:flex;align-items:center;justify-content:space-between}
+button{font:inherit;border:0;cursor:pointer;color:inherit}
+.pill{background:rgba(255,255,255,.16);color:#fff;border-radius:99px;padding:10px 14px;font-size:14px;min-width:92px}
+.pill.on{background:var(--acc);color:#111;font-weight:600}
+#shot{width:72px;height:72px;border-radius:50%;background:#fff;border:5px solid rgba(255,255,255,.4);background-clip:padding-box}
+#shot:active{transform:scale(.92)}
+#img{flex:1;min-height:0;width:100%;object-fit:contain;background:#000;-webkit-touch-callout:default;user-select:none}
+.bar{padding:14px 16px;display:flex;gap:10px;align-items:center}
+.bar .b{flex:1;padding:13px;border-radius:12px;background:var(--fg);color:var(--bg);font-weight:600;font-size:15px}
+.bar .b.sec{background:transparent;color:var(--fg);border:1px solid var(--mut)}
+.hint{padding:0 16px 14px;font-size:13px;color:var(--mut);text-align:center}
+#proc{position:absolute;inset:0;display:none;align-items:center;justify-content:center;background:rgba(0,0,0,.6);color:#fff;font-size:15px;z-index:5}
+#alt{position:absolute;left:20px;right:20px;top:60%;display:flex;gap:10px;justify-content:center;flex-wrap:wrap}
+#alt[hidden]{display:none}
+</style>
+</head>
+<body>
+<div id="cam">
+  <video id="v" playsinline autoplay muted></video>
+  <div class="frame"></div>
+  <div class="chip" id="zl">1,0×</div>
+  <div id="msg" hidden></div>
+  <div id="alt" hidden><button class="pill on" id="nat">Abrir câmera do celular</button><button class="pill" id="gal">Escolher da galeria</button></div>
+  <input id="f1" type="file" accept="image/*" capture="environment" hidden><input id="f2" type="file" accept="image/*" hidden>
+  <div class="ctl">
+    <input id="z" type="range" min="1" max="10" step="0.1" value="1" aria-label="Zoom">
+    <div class="row">
+      <button class="pill on" id="enh">Melhorar: ligado</button>
+      <button id="shot" aria-label="Tirar foto"></button>
+      <button class="pill" id="flip">Virar câmera</button>
+    </div>
+  </div>
+</div>
+<div id="res">
+  <div id="proc">Melhorando a foto…</div>
+  <img id="img" alt="Foto capturada">
+  <div class="hint" id="rh">Segure na foto para salvar na galeria. Mantenha pressionado o botão para ver o original.</div>
+  <div class="bar">
+    <button class="b sec" id="back">Voltar</button>
+    <button class="b sec" id="cmp">Ver original</button>
+    <button class="b sec" id="save">Salvar</button>
+    <button class="b" id="share">Compartilhar</button>
+  </div>
+</div>
+<script>
+const $=s=>document.querySelector(s);
+const v=$('#v'),z=$('#z'),zl=$('#zl'),msg=$('#msg'),img=$('#img'),proc=$('#proc');
+let stream,track,caps={},facing='environment',zoom=1,dig=1,enh=true,orig='',fin='';
+
+async function start(){
+  try{
+    if(stream)stream.getTracks().forEach(t=>t.stop());
+    stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:facing},width:{ideal:4096},height:{ideal:3072}},audio:false});
+    v.srcObject=stream;track=stream.getVideoTracks()[0];
+    caps=track.getCapabilities?track.getCapabilities():{};
+    msg.hidden=true;setZoom(1);z.value=1;
+  }catch(e){
+    msg.hidden=false;$('#alt').hidden=false;
+    msg.textContent='A prévia ao vivo foi bloqueada aqui ('+((e&&e.name)||'erro')+'). Use a câmera do celular ou uma foto da galeria e eu melhoro a imagem.';
+  }
+}
+function setZoom(n){
+  zoom=n;let hw=1;
+  if(caps.zoom&&track){hw=Math.min(Math.max(n,caps.zoom.min),caps.zoom.max);track.applyConstraints({advanced:[{zoom:hw}]}).catch(()=>{});}
+  dig=n/hw;
+  v.style.transform='scale('+dig+')'+(facing==='user'?' scaleX(-1)':'');
+  zl.textContent=n.toFixed(1).replace('.',',')+'×';
+}
+z.oninput=()=>setZoom(parseFloat(z.value));
+$('#flip').onclick=()=>{facing=facing==='user'?'environment':'user';start();};
+$('#enh').onclick=e=>{enh=!enh;e.target.classList.toggle('on',enh);e.target.textContent='Melhorar: '+(enh?'ligado':'desligado');};
+
+function blur(c,f){
+  const s=document.createElement('canvas');s.width=Math.max(1,Math.round(c.width/f));s.height=Math.max(1,Math.round(c.height/f));
+  const g=s.getContext('2d');g.imageSmoothingQuality='high';g.drawImage(c,0,0,s.width,s.height);
+  const t=document.createElement('canvas');t.width=c.width;t.height=c.height;
+  const u=t.getContext('2d');u.imageSmoothingQuality='high';u.drawImage(s,0,0,t.width,t.height);
+  return u.getImageData(0,0,t.width,t.height).data;
+}
+function enhance(c){
+  const x=c.getContext('2d'),w=c.width,h=c.height;
+  const im=x.getImageData(0,0,w,h),d=im.data,b2=blur(c,2),b8=blur(c,8);
+  const hist=new Uint32Array(256);
+  for(let i=0;i<d.length;i+=4){
+    for(let k=0;k<3;k++){
+      const p=d[i+k],e=p-b2[i+k];
+      const t=Math.min(1,Math.abs(e)/12);
+      // áreas lisas: reduz ruído; bordas: aumenta nitidez; mais clareza local
+      d[i+k]=p-e*(1-t)*0.6+e*t*0.9+(p-b8[i+k])*0.25;
+    }
+    hist[Math.max(0,Math.min(255,(0.299*d[i]+0.587*d[i+1]+0.114*d[i+2])|0))]++;
+  }
+  const n=w*h;let a=0,lo=0,hi=255;
+  for(let i=0;i<256;i++){a+=hist[i];if(a>n*0.005){lo=i;break;}}
+  a=0;for(let i=255;i>=0;i--){a+=hist[i];if(a>n*0.005){hi=i;break;}}
+  const s=Math.min(1.6,Math.max(1,255/Math.max(40,hi-lo)));
+  for(let i=0;i<d.length;i+=4){
+    const r=(d[i]-lo)*s,g=(d[i+1]-lo)*s,bb=(d[i+2]-lo)*s;
+    const l=0.299*r+0.587*g+0.114*bb;
+    d[i]=l+(r-l)*1.12;d[i+1]=l+(g-l)*1.12;d[i+2]=l+(bb-l)*1.12;
+  }
+  x.putImageData(im,0,0);
+}
+function capture(){
+  const vw=v.videoWidth,vh=v.videoHeight;if(!vw)return;
+  const ae=v.clientWidth/v.clientHeight,af=vw/vh;
+  let w=af>ae?vh*ae:vw,h=af>ae?vh:vw/ae;
+  w/=dig;h/=dig;
+  const sx=(vw-w)/2,sy=(vh-h)/2,k=Math.min(2,2560/Math.max(w,h));
+  const c=document.createElement('canvas');c.width=Math.round(w*k);c.height=Math.round(h*k);
+  const g=c.getContext('2d');g.imageSmoothingQuality='high';
+  if(facing==='user'){g.translate(c.width,0);g.scale(-1,1);}
+  g.drawImage(v,sx,sy,w,h,0,0,c.width,c.height);
+  finish(c);
+}
+function finish(c){
+  orig=c.toDataURL('image/jpeg',0.95);
+  $('#cam').style.display='none';$('#res').style.display='flex';
+  img.src=orig;proc.style.display=enh?'flex':'none';
+  setTimeout(()=>{
+    if(enh){try{enhance(c);}catch(e){}fin=c.toDataURL('image/jpeg',0.93);}else fin=orig;
+    img.src=fin;proc.style.display='none';
+  },60);
+}
+$('#shot').onclick=capture;
+function fromFile(file){
+  if(!file)return;
+  const im=new Image(),u=URL.createObjectURL(file);
+  im.onload=()=>{
+    const k=Math.min(1,2560/Math.max(im.naturalWidth,im.naturalHeight));
+    const c=document.createElement('canvas');c.width=Math.round(im.naturalWidth*k);c.height=Math.round(im.naturalHeight*k);
+    const g=c.getContext('2d');g.imageSmoothingQuality='high';g.drawImage(im,0,0,c.width,c.height);
+    URL.revokeObjectURL(u);finish(c);
+  };
+  im.src=u;
+}
+$('#nat').onclick=()=>$('#f1').click();
+$('#gal').onclick=()=>$('#f2').click();
+$('#f1').onchange=$('#f2').onchange=e=>{fromFile(e.target.files[0]);e.target.value='';};
+$('#back').onclick=()=>{$('#res').style.display='none';$('#cam').style.display='block';};
+const showO=()=>{img.src=orig;},showF=()=>{img.src=fin||orig;};
+const cmp=$('#cmp');
+cmp.addEventListener('pointerdown',showO);
+['pointerup','pointerleave','pointercancel'].forEach(t=>cmp.addEventListener(t,showF));
+$('#share').onclick=async()=>{
+  try{
+    const f=new File([await (await fetch(fin||orig)).blob()],'foto.jpg',{type:'image/jpeg'});
+    if(navigator.canShare&&navigator.canShare({files:[f]})){await navigator.share({files:[f]});return;}
+  }catch(e){}
+  $('#rh').textContent='Não consegui abrir o compartilhamento aqui. Segure na foto para salvar na galeria.';
+};
+$('#save').onclick=()=>{const a=document.createElement('a');a.href=fin||orig;a.download='foto-'+Date.now()+'.jpg';document.body.appendChild(a);a.click();a.remove();};
+if('serviceWorker' in navigator)navigator.serviceWorker.register('sw.js').catch(()=>{});
+start();
+</script>
+</body>
+</html>
